@@ -20,8 +20,12 @@ func main() {
 	// fmt.Println(bytesRead, string(body[:bytesRead]))
 
 	// Using io.Copy
-	logWriter := logWriter{}
-	io.Copy(logWriter, response.Body)
+	// logWriter := logWriter{}
+	// io.Copy(logWriter, response.Body)
+
+	// Using io.ReadAll
+	body, error := io.ReadAll(response.Body)
+	fmt.Println(string(body))
 
 }
 

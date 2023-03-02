@@ -24,6 +24,8 @@ func main() {
 	// Shortcut to *person
 	alex.updateName("Alexander")
 	alex.print()
+	// Can use properties of contactInfo directly
+	fmt.Println(alex.email)
 }
 
 func (pn person) print() {
