@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -37,6 +39,7 @@ type Endpoint struct {
 	handlers map[string]HandlerFunc
 }
 
+// add \?.* to end of routes to allow query params
 var routes = []Endpoint{
 	{
 		route: `^/$`,
@@ -51,6 +54,46 @@ var routes = []Endpoint{
 		handlers: map[string]HandlerFunc{
 			http.MethodGet: func(request *http.Request, _ map[string]string) (response string, status int) {
 				return fmt.Sprint(stock), http.StatusOK
+			},
+			http.MethodPost: func(request *http.Request, _ map[string]string) (response string, status int) {
+
+				body, error := io.ReadAll(request.Body)
+				if error != nil {
+					return fmt.Sprintln("Error reading body:", error), http.StatusInternalServerError
+				}
+				bodyRequest := map[string]any{}
+				if error := json.Unmarshal(body, &bodyRequest); error != nil {
+					return fmt.Sprintln("Error parsing request", error), http.StatusBadRequest
+				}
+
+				description, descriptionExists := bodyRequest["Description"]
+				stockLevel, stockLevelExists := bodyRequest["StockLevel"]
+				missingFields := []string{}
+				if !descriptionExists {
+					missingFields = append(missingFields, "Description")
+				}
+				if !stockLevelExists {
+					missingFields = append(missingFields, "Stock Level")
+				}
+
+				if !descriptionExists || !stockLevelExists {
+					return fmt.Sprintln("The following fields are required:", missingFields), http.StatusBadRequest
+				}
+
+				stkLvl, error := strconv.Atoi(fmt.Sprint(stockLevel))
+				if error != nil {
+					return fmt.Sprintln("Stock Level must be an integer. Received", stockLevel), http.StatusBadRequest
+				}
+
+				newProduct := Product{
+					id:          stock[len(stock)-1].id + 1,
+					description: fmt.Sprint(description),
+					stockLevel:  stkLvl,
+				}
+
+				stock = append(stock, newProduct)
+
+				return fmt.Sprintf("%+v", newProduct), http.StatusOK
 			},
 		},
 	},
@@ -91,7 +134,7 @@ func find_endpoint(URL *url.URL, method string) (endpoint *Endpoint, matches map
 	for _, endpoint := range routes {
 		routeExpr, error := regexp.Compile(endpoint.route)
 		if error != nil {
-			return nil, nil, error
+			log.Fatal("Error compiling endpoint", endpoint, error)
 		}
 
 		if namedMatches, found := findNamedStringSubmatch(routeExpr, URL.String()); found {
@@ -102,28 +145,54 @@ func find_endpoint(URL *url.URL, method string) (endpoint *Endpoint, matches map
 	return nil, nil, fmt.Errorf("No endpoints matching %v were found", URL)
 }
 
-func match_endpoint(writer http.ResponseWriter, request *http.Request) {
+func notFoundHandler(request *http.Request, _ map[string]string) (response string, status int) {
+	return fmt.Sprintf("No endpoint matching URL %v found", request.URL), http.StatusNotFound
+}
 
+func methodNotAllowedHandler(request *http.Request, _ map[string]string) (response string, status int) {
+	return fmt.Sprintf("Method %v is not allowed for endpoint %v", request.Method, request.URL), http.StatusMethodNotAllowed
+}
+
+func getHandler(request *http.Request) (HandlerFunc, map[string]string) {
 	endpoint, matches, error := find_endpoint(request.URL, request.Method)
 	if error != nil {
-		writer.WriteHeader(http.StatusNotFound)
-		writer.Write([]byte(fmt.Sprint(error)))
-		return
+		return notFoundHandler, matches
 	}
 
-	if handler := endpoint.handlers[request.Method]; handler == nil {
-		writer.WriteHeader(http.StatusMethodNotAllowed)
-		writer.Write([]byte(fmt.Sprintf("Method %v is not allowed for endpoint %v", request.Method, request.URL)))
-	} else {
-		response, status := handler(request, matches)
-		if status != http.StatusOK {
-			writer.WriteHeader(status)
-		}
-		writer.Write([]byte(response))
+	handler, handlerFound := endpoint.handlers[request.Method]
+	if !handlerFound {
+		return methodNotAllowedHandler, matches
 	}
 
-	// check status and message in writer
-	// log.Println(request.Method, status, request.URL)
+	return handler, matches
+
+}
+
+func match_endpoint(writer http.ResponseWriter, request *http.Request) {
+
+	// endpoint, matches, error := find_endpoint(request.URL, request.Method)
+	// if error != nil {
+	// 	writer.WriteHeader(http.StatusNotFound)
+	// 	writer.Write([]byte(fmt.Sprint(error)))
+	// 	return
+	// }
+
+	// handler, handlerFound := endpoint.handlers[request.Method]
+	// if !handlerFound {
+	// 	handler = defaultHandler
+	// }
+
+	handler, matches := getHandler(request)
+	response, status := handler(request, matches)
+	if status != http.StatusOK {
+		writer.WriteHeader(status)
+	}
+	writer.Write([]byte(response))
+
+	log.Println(request.Method, request.URL, status)
+	if status >= http.StatusBadRequest {
+		log.Print(response)
+	}
 }
 
 func main() {
